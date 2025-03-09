@@ -13,50 +13,45 @@ from scipy.spatial import cKDTree
 def distance(p1: np.ndarray, p2: np.ndarray) -> float:
     return np.linalg.norm(p1 - p2)
 
-def scale_points(data: np.ndarray, weight: List[float]) -> np.ndarray:
-    weight_arr = np.array(weight, dtype=float)
-    sqrt_weight = np.sqrt(weight_arr)
-    return data * sqrt_weight
+def scale_points(data: np.ndarray, weight: np.ndarray) -> np.ndarray:
+    return data * np.sqrt(weight.astype(float))
 
-def invert_scale_points(scaled_data: np.ndarray, weight: List[float]) -> np.ndarray:
-    weight_arr = np.array(weight, dtype=float)
-    sqrt_weight = np.sqrt(weight_arr)
-    return scaled_data / sqrt_weight
+def invert_scale_points(scaled_data: np.ndarray, weight: np.ndarray) -> np.ndarray:
+    weight = weight.astype(float)
+    sqrt_weight = np.sqrt(weight)
+    safe_sqrt_weight = np.where(sqrt_weight == 0, 1, sqrt_weight)
+    return scaled_data / safe_sqrt_weight
 
 # -------------------------------------
 # 2. Pre-indexing: cKDTree Forest 구축
 # -------------------------------------
-def build_all_indexes(data: np.ndarray, weight_list: List[List[float]]) -> List[cKDTree]:
-    kd_tree_list = []
-    for w in weight_list:
-        scaled_data = scale_points(data, w)
-        tree = cKDTree(scaled_data)
-        kd_tree_list.append(tree)
+def build_all_indexes(data: np.ndarray, weight_list: np.ndarray) -> List[cKDTree]:
+    sqrt_weights = np.sqrt(weight_list)
+    scaled_data_all = data[None, :, :] * sqrt_weights[:, None, :]
+    kd_tree_list = [cKDTree(scaled_data_all[i]) for i in range(scaled_data_all.shape[0])]
     return kd_tree_list
 
 # -------------------------------------
 # 3. 가중치 벡터 비교 (코사인 유사도 기반)
 # -------------------------------------
-def cosine_similarity(w1: List[float], w2: List[float]) -> float:
-    w1_arr = np.array(w1, dtype=float)
-    w2_arr = np.array(w2, dtype=float)
-    dot_val = np.dot(w1_arr, w2_arr)
-    norm1 = np.linalg.norm(w1_arr)
-    norm2 = np.linalg.norm(w2_arr)
+def cosine_similarity(w1: np.ndarray, w2: np.ndarray) -> float:
+    dot_val = np.dot(w1, w2)
+    norm1 = np.linalg.norm(w1)
+    norm2 = np.linalg.norm(w2)
     return dot_val / (norm1 * norm2)
 
-def distance_in_weight_space(w1: List[float], w2: List[float]) -> float:
+def distance_in_weight_space(w1: np.ndarray, w2: np.ndarray) -> float:
     return 1.0 - cosine_similarity(w1, w2)
 
 # -------------------------------------
 # 4. 저장 및 불러오기 (pickle)
 # -------------------------------------
-def save_forest(weight_list: List[List[float]], kd_tree_list: List[cKDTree], filename: str = 'forest.pkl'):
+def save_forest(weight_list: np.ndarray, kd_tree_list: List[cKDTree], filename: str = 'forest.pkl'):
     with open(filename, 'wb') as f:
         pickle.dump((weight_list, kd_tree_list), f)
     print("Forest saved to", filename)
 
-def load_forest(filename: str = 'forest.pkl') -> Tuple[Optional[List[List[float]]], Optional[List[cKDTree]]]:
+def load_forest(filename: str = 'forest.pkl') -> Tuple[Optional[np.ndarray], Optional[List[cKDTree]]]:
     try:
         with open(filename, 'rb') as f:
             weight_list, kd_tree_list = pickle.load(f)
@@ -69,13 +64,13 @@ def load_forest(filename: str = 'forest.pkl') -> Tuple[Optional[List[List[float]
 # -------------------------------------
 # 5. Query: AkNN 검색 (cKDTree 기반, Threshold 적용)
 # -------------------------------------
-def query_AkNN(q: List[float], w_user: List[float],
-               weight_list: List[List[float]], kd_tree_list: List[cKDTree],
+def query_AkNN(q: np.ndarray, w_user: np.ndarray,
+               weight_list: List[np.ndarray], kd_tree_list: List[cKDTree],
                data: np.ndarray,
                threshold: float, K: int) -> Tuple[List[tuple], bool]:
-    
     best_idx = -1
     best_metric = float('inf')
+    
     for i, w in enumerate(weight_list):
         sim_dist = distance_in_weight_space(w_user, w)
         if sim_dist < best_metric:
@@ -95,32 +90,30 @@ def query_AkNN(q: List[float], w_user: List[float],
         chosen_tree = new_tree
         new_tree_made = True
 
-    # Scale query vector
-    q_scaled = np.array(q, dtype=float) * np.sqrt(np.array(chosen_weight, dtype=float))
+    q_scaled = q * np.sqrt(chosen_weight)
     distances, indices = chosen_tree.query(q_scaled, k=K)
-    neighbors = []
+    
     if K == 1:
-        neighbors.append((distances, (chosen_tree.data[indices].tolist(), int(indices))))
+        neighbors = [(distances, (chosen_tree.data[indices].tolist(), int(indices)))]
     else:
-        for d, idx in zip(distances, indices):
-            neighbors.append((d, (chosen_tree.data[idx].tolist(), int(idx))))
+        neighbors = [(d, (chosen_tree.data[idx].tolist(), int(idx))) 
+                     for d, idx in zip(distances, indices)]
     return neighbors, new_tree_made
 
 # -------------------------------------
 # 6. Query: Exact kNN 검색 (cKDTree 활용)
 # -------------------------------------
-def query_exactKNN(q: List[float], w_user: List[float], data: np.ndarray, K: int) -> List[tuple]:
-    sqrt_w = np.sqrt(np.array(w_user, dtype=float))
+def query_exactKNN(q: np.ndarray, w_user: np.ndarray, data: np.ndarray, K: int) -> List[tuple]:
+    sqrt_w = np.sqrt(w_user)
     scaled_data = data * sqrt_w
     tree = cKDTree(scaled_data)
-    q_scaled = np.array(q, dtype=float) * sqrt_w
+    q_scaled = q * sqrt_w
     distances, indices = tree.query(q_scaled, k=K)
-    neighbors = []
+    
     if K == 1:
-        neighbors.append((distances, (tree.data[indices].tolist(), int(indices))))
+        neighbors = [(distances, (tree.data[indices].tolist(), int(indices)))]
     else:
-        for d, idx in zip(distances, indices):
-            neighbors.append((d, (tree.data[idx].tolist(), int(idx))))
+        neighbors = [(d, (tree.data[idx].tolist(), int(idx))) for d, idx in zip(distances, indices)]
     return neighbors
 
 # -------------------------------------
@@ -129,7 +122,7 @@ def query_exactKNN(q: List[float], w_user: List[float], data: np.ndarray, K: int
 def classify_knn(labels: List[int]) -> int:
     return Counter(labels).most_common(1)[0][0]
 
-def measure_preindex_time(data: np.ndarray, weight_list: List[List[float]]) -> float:
+def measure_preindex_time(data: np.ndarray, weight_list: np.ndarray) -> float:
     start = time.perf_counter()
     _ = build_all_indexes(data, weight_list)
     end = time.perf_counter()
@@ -141,40 +134,31 @@ def measure_loading_time(filename: str = 'forest.pkl') -> float:
     end = time.perf_counter()
     return end - start
 
-def measure_saving_time(weight_list: List[List[float]], kd_tree_list: List[cKDTree], filename: str = 'forest.pkl') -> float:
+def measure_saving_time(weight_list: np.ndarray, kd_tree_list: List[cKDTree], filename: str = 'forest.pkl') -> float:
     start = time.perf_counter()
     save_forest(weight_list, kd_tree_list, filename)
     end = time.perf_counter()
     return end - start
 
 def query_info() -> Tuple[np.ndarray, np.ndarray]:
-    # dry_bean 데이터셋의 각 feature에 대한 통계량 (평균, 분산)
     data_np, _ = rd.read_dataset("dry_bean")
     means = np.mean(data_np, axis=0)
     variances = np.var(data_np, axis=0)
-    std_devs = np.sqrt(variances)    
-    # 평균 ± 3 * 표준편차 구간 내에서 범위 계산
+    std_devs = np.sqrt(variances)
     lower = means - 3 * std_devs
     upper = means + 3 * std_devs
-    # 음수 값이 있으면 0으로 보정 (각 원소별 보정)
     lower = np.maximum(lower, 0)
-            
     return lower, upper
 
-def generate_query() -> Tuple[List[float], List[float]]:
-    # 미리 계산된 각 feature의 lower, upper bound 사용
+def generate_query() -> Tuple[np.ndarray, np.ndarray]:
     lower, upper = query_info()
-    dim = len(lower)
-    
-    # 각 차원별로 무작위 query 값 생성
-    q = [random.uniform(l, u) for l, u in zip(lower, upper)]
-    # 각 차원별 weight 생성 (0.01 ~ 1.0)
-    w_user = [round(random.uniform(0.01, 1.0), 3) for _ in range(dim)]
-    
+    q = np.random.uniform(lower, upper)
+    dim = lower.shape[0]
+    w_user = np.round(np.random.uniform(0.01, 1.0, size=dim), 3)
     return q, w_user
 
 def evaluate_queries(num_queries: int, labels: List[int], data: np.ndarray, 
-                     weight_list: List[List[float]], kd_tree_list: List[cKDTree], K: int) -> Tuple[float, float, float, float, float, float]:
+                     weight_list: np.ndarray, kd_tree_list: List[cKDTree], K: int) -> Tuple[float, float, float, float, float, float]:
     
     total_query_time = 0.0
     total_exact_query_time = 0.0
@@ -184,7 +168,6 @@ def evaluate_queries(num_queries: int, labels: List[int], data: np.ndarray,
     total_new_tree_count = 0
     
     for _ in range(num_queries):
-        # 랜덤 query와 user weight
         q, w_user = generate_query()
         
         start = time.perf_counter()
@@ -200,7 +183,7 @@ def evaluate_queries(num_queries: int, labels: List[int], data: np.ndarray,
         end = time.perf_counter()
         total_exact_query_time += (end - start)
         
-        # (3-1) classification 정확도 (akNN 결과와 exact 결과의 다수결 비교)
+        # (3-1) classification 정확도: akNN 결과와 exact 결과의 다수결 비교
         aknn_indices = [cand[1] for (_, cand) in aknn_results]
         exact_indices = [cand[1] for (_, cand) in exact_results]
         
@@ -213,21 +196,21 @@ def evaluate_queries(num_queries: int, labels: List[int], data: np.ndarray,
         if class_aknn == class_exact:
             correct_class_count += 1
             
-        # (3-2) 이웃 간 거리 오차: akNN 결과와 exact 결과의 차이(각 query당 K로 나눈 평균 오차)
+        # (3-2) 이웃 간 거리 오차: akNN 결과와 exact 결과의 차이 (각 query당 K로 나눈 평균 오차)
         query_error = 0.0
         exact_points = data[exact_indices]
+        exact_indices_set = set(exact_indices)  # 멤버십 검사를 위해 set 변환
         for idx_aknn in aknn_indices:
-            if idx_aknn not in exact_indices:
+            if idx_aknn not in exact_indices_set:
                 aknn_point = data[idx_aknn]
                 distances = np.linalg.norm(exact_points - aknn_point, axis=1)
                 error = np.min(distances)
                 query_error += error
-        # query_error를 K로 나누어 평균 오차로 산출
         total_query_error += (query_error / K)
         
         # (3-3) 정확한 점의 개수 (교집합 크기)
         total_exact_matches += len(set(aknn_indices).intersection(exact_indices))
-
+    
     avg_query_time = total_query_time / num_queries
     avg_exact_query_time = total_exact_query_time / num_queries
     classification_accuracy = correct_class_count / num_queries
@@ -240,7 +223,7 @@ def evaluate_queries(num_queries: int, labels: List[int], data: np.ndarray,
 # 8. 메인: Reader API를 사용하여 Dry Bean 데이터셋 평가
 # -------------------------------------
 if __name__ == "__main__":
-    random.seed(42)
+    random.seed()
     
     # 데이터셋 로드 (Reader API)
     data_np, labels_np = rd.read_dataset("dry_bean")
@@ -276,18 +259,19 @@ if __name__ == "__main__":
     for i, w in enumerate(weight_list):
         print(f"Tree {i+1}: weight = {w}")
     
-    random.seed()
-    
     # 1번: 사전 인덱싱 시간 측정
     loading_time = measure_loading_time("forest.pkl")
     print(f"Loading time for forest: {loading_time:.4f} seconds.")
+    
+    saving_time = measure_saving_time(weight_list, kd_tree_list, "forest.pkl")
+    print(f"Saving time for forest: {saving_time:.4f} seconds.")
     
     preindex_time = measure_preindex_time(data, weight_list)
     print(f"Pre-indexing time for forest: {preindex_time:.4f} seconds.")
 
     # 2번: 1000번 random query에 대해 akNN 검색 시간 측정 (Exact 제외)
     num_queries = 1000
-    K = 6
+    K = 10
     avg_q_time, avg_exact_q_time, class_acc, avg_q_err, avg_exact_matches, new_tree_count = evaluate_queries(num_queries, labels, data, weight_list, kd_tree_list, K)
     print("\n=== Query Evaluation over {} queries ===".format(num_queries))
     print(f"Average akNN query time: {avg_q_time:.6f} seconds per query.")
