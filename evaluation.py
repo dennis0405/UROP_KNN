@@ -2,6 +2,7 @@ import time
 from typing import List, Tuple
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.optimize import linear_sum_assignment
 from kd_tree_forest import build_all_indexes, save_forest, load_forest
 from kd_tree_forest import query_AkNN, query_exactKNN
 from classification import classify_knn_weighted
@@ -37,12 +38,13 @@ def generate_query(dim: int) -> Tuple[np.ndarray, np.ndarray]:
 def evaluate_queries(num_queries: int, labels: List[str], data: np.ndarray, 
                      weight_list: np.ndarray, kd_tree_list: List[cKDTree], K: int, threshold: float) -> Tuple[float, float, float, float, float, float]:
     
-    total_query_time = 0.0
-    total_exact_query_time = 0.0
-    correct_class_count = 0
-    total_query_error = 0.0
-    total_exact_matches = 0
-    total_new_tree_count = 0
+    query_time_list = []
+    exact_query_time_list = []
+    correct_list = []         # 1 if correct, 0 otherwise
+    query_error_list = []
+    exact_matches_list_count = []
+    new_tree_count_list = []
+    
     dim = data.shape[1]
     
     for _ in range(num_queries):
@@ -51,42 +53,44 @@ def evaluate_queries(num_queries: int, labels: List[str], data: np.ndarray,
         start = time.perf_counter()
         aknn_results, new_tree_made = query_AkNN(q, w_user, weight_list, kd_tree_list, data, threshold, K=K)
         end = time.perf_counter()
-        total_query_time += (end - start)
-        
-        if new_tree_made:
-            total_new_tree_count += 1
+        query_time_list.append(end - start)
+        new_tree_count_list.append(1 if new_tree_made else 0)
         
         start = time.perf_counter()
         exact_results = query_exactKNN(q, w_user, data, K=K)
         end = time.perf_counter()
-        total_exact_query_time += (end - start)
+        exact_query_time_list.append(end - start)
         
         class_aknn = classify_knn_weighted(aknn_results, labels)
         class_exact = classify_knn_weighted(exact_results, labels)
+        correct_list.append(1 if class_aknn == class_exact else 0)
         
-        if class_aknn == class_exact:
-            correct_class_count += 1
+        approx_indices = [cand[1] for (_, cand) in aknn_results]
+        exact_indices = [cand[1] for (_, cand) in exact_results]
+        common = set(approx_indices).intersection(exact_indices)
         
-        # error 산출 방식에 개선 필요
-        query_error = 0.0
-        exact_points = data[[cand[1] for (_, cand) in exact_results]]
-        exact_indices = set([cand[1] for (_, cand) in exact_results])
-        for _, cand in aknn_results:
-            idx = cand[1]
-            if idx not in exact_indices:
-                aknn_point = data[idx]
-                distances = np.linalg.norm(exact_points - aknn_point, axis=1)
-                error = np.min(distances)
-                query_error += error
-        total_query_error += (query_error / K)
+        unmatched_approx = [cand[1] for (_, cand) in aknn_results if cand[1] not in common]
+        unmatched_exact = [cand[1] for (_, cand) in exact_results if cand[1] not in common]
         
-        aknn_indices = set([cand[1] for (_, cand) in aknn_results])
-        total_exact_matches += len(aknn_indices.intersection(exact_indices))
+        if unmatched_approx:
+            approx_points = data[unmatched_approx]   # shape (n, d)
+            exact_points = data[unmatched_exact]       # shape (n, d)
+            diff = approx_points[:, np.newaxis, :] - exact_points[np.newaxis, :, :]
+            cost_matrix = np.linalg.norm(diff, axis=2)
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            query_err = cost_matrix[row_ind, col_ind].sum()
+        else:
+            query_err = 0.0
+        query_error_list.append(query_err / K)
+        
+        exact_matches_list_count.append(len(common))
     
-    avg_query_time = total_query_time / num_queries
-    avg_exact_query_time = total_exact_query_time / num_queries
-    classification_accuracy = correct_class_count / num_queries
-    avg_query_error = total_query_error / num_queries
-    avg_exact_matches = total_exact_matches / num_queries
+    avg_query_time = np.mean(query_time_list)
+    avg_exact_query_time = np.mean(exact_query_time_list)
+    classification_accuracy = np.mean(correct_list)
+    avg_query_error = np.mean(query_error_list)
+    avg_exact_matches = np.mean(exact_matches_list_count) / K
+    total_new_tree_count = np.sum(new_tree_count_list)
     
     return avg_query_time, avg_exact_query_time, classification_accuracy, avg_query_error, avg_exact_matches, total_new_tree_count
+

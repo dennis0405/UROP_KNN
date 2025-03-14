@@ -2,3 +2,5 @@ npy/
 __pycache__/
 compressed/
 check.py
+forest.pkl
+test_result/

@@ -28,6 +28,12 @@ def load_forest(filename: str = 'forest.pkl') -> Tuple[Optional[np.ndarray], Opt
         print("No valid saved forest found. A new one will be created.")
         return None, None
 
+# 가중치 리스트 출력
+def check_forest():
+    weight_list = load_forest('forest.pkl')[0]
+    for i, w in enumerate(weight_list):
+        print(f"Tree {i}: {w}")
+
 # AKNN 알고리즘 구현
 def query_AkNN(q: np.ndarray, w_user: np.ndarray,
                weight_list: List[np.ndarray], kd_tree_list: List[cKDTree],
