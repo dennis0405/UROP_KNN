@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Tuple
 
 # 두 점 사이 거리 계산
 def distance(p1: np.ndarray, p2: np.ndarray) -> float:
@@ -15,11 +16,13 @@ def invert_scale_points(scaled_data: np.ndarray, weight: np.ndarray) -> np.ndarr
     return scaled_data / safe_sqrt_weight
 
 # Weight 간 유사도 계산
-def cosine_similarity(w1: np.ndarray, w2: np.ndarray) -> float:
-    dot_val = np.dot(w1, w2)
-    norm1 = np.linalg.norm(w1)
-    norm2 = np.linalg.norm(w2)
-    return dot_val / (norm1 * norm2)
-
-def distance_in_weight_space(w1: np.ndarray, w2: np.ndarray) -> float:
-    return 1.0 - cosine_similarity(w1, w2)
+def distance_in_weight_space(w_user: np.ndarray, weight_list: np.ndarray) -> Tuple[int, float]:
+    norm_w_user = np.linalg.norm(w_user)
+    norms = np.linalg.norm(weight_list, axis=1)
+    cosine_similarities = np.dot(weight_list, w_user) / (norms * norm_w_user)
+    distances = 1.0 - cosine_similarities
+    
+    best_idx = np.argmin(distances)
+    best_metric = distances[best_idx]
+    
+    return best_idx, best_metric

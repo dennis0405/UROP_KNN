@@ -1,12 +1,23 @@
 from typing import List
+import numpy as np
 
 # KNN result classification (weighted)
-def classify_knn_weighted(neighbors: List[tuple], labels: List[str]) -> str:
+def classify_knn_weighted(neighbors: List[tuple], labels: np.ndarray) -> str:
     epsilon = 1e-6
-    vote_dict = {}
-    for dist, neighbor in neighbors:
-        idx = neighbor[1]  
-        label = labels[idx]
-        weight = 1.0 / (dist + epsilon)
-        vote_dict[label] = vote_dict.get(label, 0) + weight
-    return max(vote_dict.items(), key=lambda x: x[1])[0]
+    
+    distances = np.array([dist for (dist, _) in neighbors])
+    indices = np.array([idx for (_, idx) in neighbors])
+    
+    # weight 계산: 1/(distance + epsilon)
+    weights = 1.0 / (distances + epsilon)
+    
+    # 각 neighbor의 label을 가져옴
+    neighbor_labels = labels[indices]
+    
+    # unique한 label별로 가중치 합산
+    unique_labels, inverse = np.unique(neighbor_labels, return_inverse=True)
+    vote_sums = np.bincount(inverse, weights=weights)
+    
+    # 가중치 합산이 최대인 label 선택
+    best_label = unique_labels[np.argmax(vote_sums)]
+    return best_label

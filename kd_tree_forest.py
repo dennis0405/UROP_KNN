@@ -35,52 +35,48 @@ def check_forest():
         print(f"Tree {i}: {w}")
 
 # AKNN 알고리즘 구현
+@profile
 def query_AkNN(q: np.ndarray, w_user: np.ndarray,
-               weight_list: List[np.ndarray], kd_tree_list: List[cKDTree],
-               data: np.ndarray,
-               threshold: float, K: int) -> Tuple[List[tuple], bool]:
-    best_idx = -1
-    best_metric = float('inf')
+               weight_list: np.ndarray, kd_tree_list: List[cKDTree],
+               data: np.ndarray, tree_usage: List[int],
+               threshold: float, K: int, max_trees: int) -> Tuple[List[tuple], bool]:
     
-    for i, w in enumerate(weight_list):
-        sim_dist = distance_in_weight_space(w_user, w)
-        if sim_dist < best_metric:
-            best_metric = sim_dist
-            best_idx = i
-
+    best_idx, best_metric = distance_in_weight_space(w_user, weight_list)
+    
     if best_metric <= threshold:
         chosen_weight = weight_list[best_idx]
         chosen_tree = kd_tree_list[best_idx]
         new_tree_made = False
+        tree_usage[best_idx] += 1
     else:
         chosen_weight = w_user
         new_scaled_data = scale_points(data, w_user)
-        new_tree = cKDTree(new_scaled_data)
-        weight_list.append(w_user)
-        kd_tree_list.append(new_tree)
-        chosen_tree = new_tree
+        chosen_tree = cKDTree(new_scaled_data)
         new_tree_made = True
-
+        
+        if (weight_list.shape[0] < max_trees):        
+            np.append(weight_list, [w_user], axis=0)
+            kd_tree_list.append(chosen_tree)
+            tree_usage.append(1)
+        else:
+            min_usage_idx = int(np.argmin(tree_usage))
+            weight_list[min_usage_idx] = w_user
+            kd_tree_list[min_usage_idx] = chosen_tree
+            tree_usage[min_usage_idx] = 1
+            
     q_scaled = q * np.sqrt(chosen_weight)
     distances, indices = chosen_tree.query(q_scaled, k=K)
     
-    if K == 1:
-        neighbors = [(distances, (chosen_tree.data[indices].tolist(), int(indices)))]
-    else:
-        neighbors = [(d, (chosen_tree.data[idx].tolist(), int(idx))) 
-                     for d, idx in zip(distances, indices)]
+    neighbors = [(d, idx) for d, idx in zip(distances, indices)]
+    
     return neighbors, new_tree_made
 
 # 정확한 KNN 알고리즘 구현
 def query_exactKNN(q: np.ndarray, w_user: np.ndarray, data: np.ndarray, K: int) -> List[tuple]:
-    sqrt_w = np.sqrt(w_user)
-    scaled_data = data * sqrt_w
+    scaled_data = scale_points(data, w_user)
     tree = cKDTree(scaled_data)
-    q_scaled = q * sqrt_w
+    q_scaled = q * np.sqrt(w_user)
     distances, indices = tree.query(q_scaled, k=K)
     
-    if K == 1:
-        neighbors = [(distances, (tree.data[indices].tolist(), int(indices)))]
-    else:
-        neighbors = [(d, (tree.data[idx].tolist(), int(idx))) for d, idx in zip(distances, indices)]
+    neighbors = [(d, idx) for d, idx in zip(distances, indices)]
     return neighbors

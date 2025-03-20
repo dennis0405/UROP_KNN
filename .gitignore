@@ -4,3 +4,5 @@ compressed/
 check.py
 forest.pkl
 test_result/
+main.py.lprof
+profile_output.txt
